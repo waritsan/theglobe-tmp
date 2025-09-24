@@ -1,3 +1,21 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
-
 name: theglobe
+resources:
+  ai-project:
+    type: ai.project
+    models:
+      - name: gpt-5-mini
+        version: "2025-08-07"
+        format: OpenAI
+        sku:
+          name: GlobalStandard
+          usageName: OpenAI.GlobalStandard.gpt-5-mini
+          capacity: 10
+  theglobe-db-dev:
+    type: db.cosmos
+  storage:
+    type: storage
+    containers:
+      - theglobe-sa-dev
+  vault:
+    type: keyvault
