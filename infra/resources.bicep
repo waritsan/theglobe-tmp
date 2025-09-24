@@ -8,8 +8,6 @@ param tags object = {}
 param enableCosmosFreeTier bool = true
 
 
-param aiFoundryProjectEndpoint string
-
 @description('Id of the user or app to assign application roles')
 param principalId string
 
@@ -86,6 +84,45 @@ module storageAccount 'br/public:avm/res/storage/storage-account:0.17.2' = {
       defaultAction: 'Allow'
     }
     tags: tags
+  }
+}
+
+@description('Enable creation of an Azure Static Web App')
+param enableStaticWebApp bool = true
+
+@description('Repository URL for the Static Web App (e.g. https://github.com/owner/repo)')
+param staticSiteRepositoryUrl string = ''
+
+@description('Branch for the Static Web App repository')
+param staticSiteBranch string = 'main'
+
+@description('App location (relative path within the repo)')
+param staticAppLocation string = '/'
+
+@description('API location (relative path within the repo)')
+param staticApiLocation string = 'api'
+
+@description('App artifact (output) location after build')
+param staticAppArtifactLocation string = 'build'
+
+// Create an Azure Static Web App (minimal configuration). The service will
+// create a GitHub Action if repository details are provided.
+resource staticSite 'Microsoft.Web/staticSites@2022-03-01' = if (enableStaticWebApp) {
+  // use the existing abbreviation key from abbreviations.json: "webStaticSites"
+  name: '${abbrs.webStaticSites}${resourceToken}'
+  location: location
+  tags: tags
+  sku: {
+    name: 'Free'
+  }
+  properties: {
+    repositoryUrl: staticSiteRepositoryUrl
+    branch: staticSiteBranch
+    buildProperties: {
+      appLocation: staticAppLocation
+      apiLocation: staticApiLocation
+      appArtifactLocation: staticAppArtifactLocation
+    }
   }
 }
 
