@@ -6,7 +6,7 @@ param keyVaultResourceId string
 @description('Optional capabilities to pass to the Cosmos DB account (e.g., serverless).')
 param capabilities array = []
 @description('Enable Cosmos DB free tier for the account where available.')
-param enableFreeTier bool = false
+param enableFreeTier bool = true
 param connectionStringKey string = 'AZURE-COSMOS-CONNECTION-STRING'
 param collections array = [
   {
