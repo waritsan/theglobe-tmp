@@ -2,84 +2,289 @@ targetScope = 'subscription'
 
 @minLength(1)
 @maxLength(64)
-@description('Name of the environment that can be used as part of naming resource convention')
+@description('Name of the the environment which is used to generate a short unique hash used in all resources.')
 param environmentName string
 
 @minLength(1)
 @description('Primary location for all resources')
 param location string
 
-@metadata({azd: {
-  type: 'location'
-  usageName: [
-    'OpenAI.GlobalStandard.gpt-5-mini,10'
-  ]}
-})
-param aiDeploymentsLocation string
+// Optional parameters to override the default azd resource naming conventions. Update the main.parameters.json file to provide values. e.g.,:
+// "resourceGroupName": {
+//      "value": "myGroupName"
+// }
+param apiServiceName string = ''
+param applicationInsightsDashboardName string = ''
+param applicationInsightsName string = ''
+param appServicePlanName string = ''
+param cosmosAccountName string = ''
+param keyVaultName string = ''
+param logAnalyticsName string = ''
+param resourceGroupName string = ''
+param storageAccountName string = ''
+param webServiceName string = ''
+param apimServiceName string = ''
+
+@description('Flag to use Azure API Management to mediate the calls between the Web frontend and the backend API')
+param useAPIM bool = false
+
+@description('API Management SKU to use if APIM is enabled')
+param apimSku string = 'Consumption'
+
+@description('When true, use a serverless (consumption) App Service plan (Y1). When false, use the Free App Service tier (F1).')
+param useServerlessAppService bool = true
+
+@description('When true, configure Cosmos DB with the serverless capability (where supported).')
+param useServerlessCosmos bool = true
+
+@description('When true, enable the Cosmos DB Free Tier (where available) for the account.')
+param enableCosmosFreeTier bool = true
 
 @description('Id of the user or app to assign application roles')
-param principalId string
+param principalId string = ''
 
-@description('Principal type of user or app')
-param principalType string
+@description('Enable a subscription-level cost budget resource')
+param enableCostBudget bool = true
 
-// Tags that should be applied to all resources.
-// 
-// Note that 'azd-service-name' tags should be applied separately to service host resources.
-// Example usage:
-//   tags: union(tags, { 'azd-service-name': <service name in azure.yaml> })
-var tags = {
-  'azd-env-name': environmentName
-}
+@description('Monthly budget amount in the subscription currency (whole number, e.g., 50)')
+param budgetAmount int = 50
+
+var abbrs = loadJsonContent('./abbreviations.json')
+var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
+var tags = { 'azd-env-name': environmentName }
+var webUri = 'https://${web.outputs.defaultHostname}'
+var apimName = !empty(apimServiceName) ? apimServiceName : '${abbrs.apiManagementService}${resourceToken}'
 
 // Organize resources in a resource group
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
-  name: 'rg-${environmentName}'
+  name: !empty(resourceGroupName) ? resourceGroupName : '${abbrs.resourcesResourceGroups}${environmentName}'
   location: location
   tags: tags
 }
 
-module resources 'resources.bicep' = {
+// The application frontend
+module web 'br/public:avm/res/web/static-site:0.3.0' = {
+  name: 'staticweb'
   scope: rg
-  name: 'resources'
   params: {
+    name: !empty(webServiceName) ? webServiceName : '${abbrs.webStaticSites}web-${resourceToken}'
     location: location
-    tags: tags
-    principalId: principalId
-    principalType: principalType
-    aiFoundryProjectEndpoint: aiModelsDeploy.outputs.ENDPOINT
+    provider: 'Custom'
+    tags: union(tags, { 'azd-service-name': 'web' })
   }
 }
 
-module aiModelsDeploy 'ai-project.bicep' = {
+// The application backend
+module api './app/api-appservice-avm.bicep' = {
+  name: 'api'
   scope: rg
-  name: 'ai-project'
   params: {
+    name: !empty(apiServiceName) ? apiServiceName : '${abbrs.webSitesAppService}api-${resourceToken}'
+    location: location
     tags: tags
-    location: aiDeploymentsLocation
-    envName: environmentName
-    principalId: principalId
-    principalType: principalType
-    deployments: [
+    kind: 'functionapp'
+    appServicePlanId: appServicePlan.outputs.resourceId
+    appSettings: {
+      API_ALLOW_ORIGINS: webUri
+      AZURE_COSMOS_CONNECTION_STRING_KEY: cosmos.outputs.connectionStringKey
+      AZURE_COSMOS_DATABASE_NAME: cosmos.outputs.databaseName
+      AZURE_KEY_VAULT_ENDPOINT:keyVault.outputs.uri
+      AZURE_COSMOS_ENDPOINT: 'https://${cosmos.outputs.databaseName}.documents.azure.com:443/'
+      FUNCTIONS_EXTENSION_VERSION: '~4'
+      FUNCTIONS_WORKER_RUNTIME: 'python'
+      SCM_DO_BUILD_DURING_DEPLOYMENT: true
+    }
+    appInsightResourceId: monitoring.outputs.applicationInsightsResourceId
+    siteConfig: {
+      linuxFxVersion: 'python|3.10'
+    }
+    allowedOrigins: [ webUri ]
+    storageAccountResourceId: storage.outputs.resourceId
+    clientAffinityEnabled: false
+  }
+}
+
+// Give the API access to KeyVault
+module accessKeyVault 'br/public:avm/res/key-vault/vault:0.5.1' = {
+  name: 'accesskeyvault'
+  scope: rg
+  params: {
+    name: keyVault.outputs.name
+    enableRbacAuthorization: false
+    enableVaultForDeployment: false
+    enableVaultForTemplateDeployment: false
+    enablePurgeProtection: false
+    sku: 'standard'
+    accessPolicies: [
       {
-        name: 'gpt5MiniDeployment'
-        model: {
-          name: 'gpt-5-mini'
-          format: 'OpenAI'
-          version: '2025-08-07'
+        objectId: api.outputs.SERVICE_API_IDENTITY_PRINCIPAL_ID
+        permissions: {
+          secrets: [ 'get', 'list' ]
         }
-        sku: {
-          name: 'GlobalStandard'
-          capacity: 10
+      }
+      {
+        objectId: principalId
+        permissions: {
+          secrets: [ 'get', 'list' ]
         }
       }
     ]
   }
 }
-output AZURE_KEY_VAULT_ENDPOINT string = resources.outputs.AZURE_KEY_VAULT_ENDPOINT
-output AZURE_KEY_VAULT_NAME string = resources.outputs.AZURE_KEY_VAULT_NAME
-output AZURE_RESOURCE_VAULT_ID string = resources.outputs.AZURE_RESOURCE_VAULT_ID
-output AZURE_RESOURCE_THEGLOBE_DB_DEV_ID string = resources.outputs.AZURE_RESOURCE_THEGLOBE_DB_DEV_ID
-output AZURE_RESOURCE_STORAGE_ID string = resources.outputs.AZURE_RESOURCE_STORAGE_ID
-output AZURE_AI_PROJECT_ENDPOINT string = aiModelsDeploy.outputs.ENDPOINT
-output AZURE_RESOURCE_AI_PROJECT_ID string = aiModelsDeploy.outputs.projectId
+
+// The application database
+module cosmos './app/db-avm.bicep' = {
+  name: 'cosmos'
+  scope: rg
+  params: {
+    accountName: !empty(cosmosAccountName) ? cosmosAccountName : '${abbrs.documentDBDatabaseAccounts}${resourceToken}'
+    location: location
+    tags: tags
+    keyVaultResourceId: keyVault.outputs.resourceId
+    // If requested, enable the serverless capability for Cosmos DB (this maps to the service's serverless offering)
+    capabilities: useServerlessCosmos ? [ 'EnableServerless' ] : []
+    enableFreeTier: enableCosmosFreeTier
+  }
+}
+
+// Create an App Service Plan to group applications under the same payment plan and SKU
+module appServicePlan 'br/public:avm/res/web/serverfarm:0.1.1' = {
+  name: 'appserviceplan'
+  scope: rg
+  params: {
+    name: !empty(appServicePlanName) ? appServicePlanName : '${abbrs.webServerFarms}${resourceToken}'
+    sku: useServerlessAppService ? {
+      name: 'Y1'
+      tier: 'Dynamic'
+    } : {
+      name: 'F1'
+      tier: 'Free'
+    }
+    location: location
+    tags: tags
+    reserved: true
+    kind: 'Linux'
+  }
+}
+
+// Backing storage for Azure functions backend API
+module storage 'br/public:avm/res/storage/storage-account:0.8.3' = {
+  name: 'storage'
+  scope: rg
+  params: {
+    name: !empty(storageAccountName) ? storageAccountName : '${abbrs.storageStorageAccounts}${resourceToken}'
+    allowBlobPublicAccess: true
+    dnsEndpointType: 'Standard'
+    publicNetworkAccess:'Enabled'
+    networkAcls:{
+      bypass: 'AzureServices'
+      defaultAction: 'Allow'
+    }
+    location: location
+    tags: tags
+  }
+}
+
+// Create a keyvault to store secrets
+module keyVault 'br/public:avm/res/key-vault/vault:0.5.1' = {
+  name: 'keyvault'
+  scope: rg
+  params: {
+    name: !empty(keyVaultName) ? keyVaultName : '${abbrs.keyVaultVaults}${resourceToken}'
+    location: location
+    tags: tags
+    enableRbacAuthorization: false
+    enableVaultForDeployment: false
+    enableVaultForTemplateDeployment: false
+    enablePurgeProtection: false
+    sku: 'standard'
+  }
+}
+
+// Monitor application with Azure Monitor
+module monitoring 'br/public:avm/ptn/azd/monitoring:0.1.0' = {
+  name: 'monitoring'
+  scope: rg
+  params: {
+    applicationInsightsName: !empty(applicationInsightsName) ? applicationInsightsName : '${abbrs.insightsComponents}${resourceToken}'
+    logAnalyticsName: !empty(logAnalyticsName) ? logAnalyticsName : '${abbrs.operationalInsightsWorkspaces}${resourceToken}'
+    applicationInsightsDashboardName: !empty(applicationInsightsDashboardName) ? applicationInsightsDashboardName : '${abbrs.portalDashboards}${resourceToken}'
+    location: location
+    tags: tags
+  }
+}
+
+// Creates Azure API Management (APIM) service to mediate the requests between the frontend and the backend API
+module apim 'br/public:avm/res/api-management/service:0.2.0' = if (useAPIM) {
+  name: 'apim-deployment'
+  scope: rg
+  params: {
+    name: !empty(apimServiceName) ? apimServiceName : '${abbrs.apiManagementService}${resourceToken}'
+    publisherEmail: 'noreply@microsoft.com'
+    publisherName: 'n/a'
+    location: location
+    tags: tags
+    sku: apimSku
+    skuCount: 0
+    zones: []
+    customProperties: {}
+    loggers: [
+      {
+        name: 'app-insights-logger'
+        credentials: {
+          instrumentationKey: monitoring.outputs.applicationInsightsInstrumentationKey
+        }
+        loggerDescription: 'Logger to Azure Application Insights'
+        isBuffered: false
+        loggerType: 'applicationInsights'
+        targetResourceId: monitoring.outputs.applicationInsightsResourceId
+      }
+    ]
+  }
+}
+
+//Configures the API settings for an api app within the Azure API Management (APIM) service.
+module apimApi 'br/public:avm/ptn/azd/apim-api:0.1.0' = if (useAPIM) {
+  name: 'apim-api-deployment'
+  scope: rg
+  params: {
+    apiBackendUrl: api.outputs.SERVICE_API_URI
+    apiDescription: 'This is a simple Todo API'
+    apiDisplayName: 'Simple Todo API'
+    apiName: 'todo-api'
+    apiPath: 'todo'
+  name: apimName
+    webFrontendUrl: webUri
+    location: location
+    apiAppName: api.outputs.SERVICE_API_NAME
+  }
+}
+
+// Data outputs
+output AZURE_COSMOS_CONNECTION_STRING_KEY string = cosmos.outputs.connectionStringKey
+output AZURE_COSMOS_DATABASE_NAME string = cosmos.outputs.databaseName
+
+// App outputs
+output APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoring.outputs.applicationInsightsConnectionString
+output AZURE_KEY_VAULT_ENDPOINT string = keyVault.outputs.uri
+output AZURE_KEY_VAULT_NAME string = keyVault.outputs.name
+output AZURE_LOCATION string = location
+output AZURE_TENANT_ID string = tenant().tenantId
+output API_BASE_URL string = api.outputs.SERVICE_API_URI
+output REACT_APP_WEB_BASE_URL string = webUri
+output USE_APIM bool = useAPIM
+output SERVICE_API_ENDPOINTS array = [ api.outputs.SERVICE_API_URI ]
+
+// Create a subscription budget to track (and optionally alert on) costs
+resource costBudget 'Microsoft.Consumption/budgets@2019-10-01' = if (enableCostBudget) {
+  name: 'budget-${environmentName}'
+  properties: {
+    category: 'Cost'
+    amount: budgetAmount
+    timeGrain: 'Monthly'
+    timePeriod: {
+      startDate: '2025-09-01T00:00:00Z'
+      endDate: '2100-12-31T23:59:59Z'
+    }
+  }
+}
