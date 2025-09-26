@@ -6,30 +6,12 @@ param keyVaultResourceId string
 @description('Optional capabilities to pass to the Cosmos DB account (e.g., serverless).')
 param capabilities array = []
 @description('Enable Cosmos DB free tier for the account where available.')
-param enableFreeTier bool = true
+param enableFreeTier bool = false
 param connectionStringKey string = 'AZURE-COSMOS-CONNECTION-STRING'
 param collections array = [
   {
-    name: 'TodoList'
-    id: 'TodoList'
-    shardKey: {
-      keys: [
-        'Hash'
-      ]
-    }
-    indexes: [
-      {
-        key: {
-          keys: [
-            '_id'
-          ]
-        }
-      }
-    ]
-  }
-  {
-    name: 'TodoItem'
-    id: 'TodoItem'
+    name: 'Post'
+    id: 'Post'
     shardKey: {
       keys: [
         'Hash'
@@ -47,7 +29,7 @@ param collections array = [
   }
 ]
 
-var defaultDatabaseName = 'Todo'
+var defaultDatabaseName = 'TheGlobeDev'
 var actualDatabaseName = !empty(cosmosDatabaseName) ? cosmosDatabaseName : defaultDatabaseName
 
 module cosmos 'br/public:avm/res/document-db/database-account:0.6.0' = {

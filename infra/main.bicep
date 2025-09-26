@@ -31,9 +31,6 @@ param useAPIM bool = false
 @description('API Management SKU to use if APIM is enabled')
 param apimSku string = 'Consumption'
 
-@description('When true, use a serverless (consumption) App Service plan (Y1). When false, use the Free App Service tier (F1).')
-param useServerlessAppService bool = true
-
 @description('When true, configure Cosmos DB with the serverless capability (where supported).')
 param useServerlessCosmos bool = true
 
@@ -54,6 +51,8 @@ var resourceToken = toLower(uniqueString(subscription().id, environmentName, loc
 var tags = { 'azd-env-name': environmentName }
 var webUri = 'https://${web.outputs.defaultHostname}'
 var apimName = !empty(apimServiceName) ? apimServiceName : '${abbrs.apiManagementService}${resourceToken}'
+// API kind used for backend apps. Keep centralized so SKU selection can avoid unsupported combinations.
+var apiKind = 'functionapp'
 
 // Organize resources in a resource group
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
@@ -82,7 +81,7 @@ module api './app/api-appservice-avm.bicep' = {
     name: !empty(apiServiceName) ? apiServiceName : '${abbrs.webSitesAppService}api-${resourceToken}'
     location: location
     tags: tags
-    kind: 'functionapp'
+  kind: apiKind
     appServicePlanId: appServicePlan.outputs.resourceId
     appSettings: {
       API_ALLOW_ORIGINS: webUri
@@ -153,12 +152,10 @@ module appServicePlan 'br/public:avm/res/web/serverfarm:0.1.1' = {
   scope: rg
   params: {
     name: !empty(appServicePlanName) ? appServicePlanName : '${abbrs.webServerFarms}${resourceToken}'
-    sku: useServerlessAppService ? {
+    // Functions are not supported on Free (F1). Force Y1 when deploying a function app.
+    sku: {
       name: 'Y1'
       tier: 'Dynamic'
-    } : {
-      name: 'F1'
-      tier: 'Free'
     }
     location: location
     tags: tags
